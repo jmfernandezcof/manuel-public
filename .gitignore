@@ -1,0 +1,5 @@
+# Third-party manuals are not committed (see KB_SOURCES.md)
+*.pdf
+__pycache__/
+*.pyc
+.env

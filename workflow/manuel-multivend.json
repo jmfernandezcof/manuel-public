@@ -1,0 +1,1183 @@
+{
+  "name": "MANuel Multivend - L1 Tech (Responses API + RAG)",
+  "nodes": [
+    {
+      "id": "t1",
+      "name": "Telegram Trigger",
+      "webhookId": "manuel-mv-tg-4b7d",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        200
+      ],
+      "parameters": {
+        "updates": [
+          "message"
+        ],
+        "additionalFields": {}
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "Ms3ZONls8XKiT7Li",
+          "name": "MANuel - Operman"
+        }
+      }
+    },
+    {
+      "id": "t2",
+      "name": "Typing",
+      "webhookId": "manuel-mv-typing-4b7d",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "onError": "continueRegularOutput",
+      "position": [
+        240,
+        0
+      ],
+      "parameters": {
+        "operation": "sendChatAction",
+        "chatId": "={{ $json.message.chat.id }}",
+        "action": "typing"
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "Ms3ZONls8XKiT7Li",
+          "name": "MANuel - Operman"
+        }
+      }
+    },
+    {
+      "id": "i1",
+      "name": "Is Command?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        240,
+        200
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "cmd1",
+              "leftValue": "={{ /^\\/(start|reset)/i.test($json.message.text || '') }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "d1",
+      "name": "Clear Session",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1,
+      "alwaysOutputData": true,
+      "position": [
+        480,
+        60
+      ],
+      "parameters": {
+        "operation": "deleteRows",
+        "dataTableId": {
+          "__rl": true,
+          "value": "QAWntSYFoVq7sQEm",
+          "mode": "id"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "chatId",
+              "keyValue": "={{ $('Telegram Trigger').first().json.message.chat.id.toString() }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "w1",
+      "name": "Send Welcome",
+      "webhookId": "manuel-mv-welcome-4b7d",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        720,
+        60
+      ],
+      "parameters": {
+        "chatId": "={{ $('Telegram Trigger').first().json.message.chat.id }}",
+        "text": "={{ '👋 Hi' + ($('Telegram Trigger').first().json.message.from.first_name ? ' ' + $('Telegram Trigger').first().json.message.from.first_name : '') + '! I\\'m MANuel, Multivend\\'s virtual Level-1 technician 🔧\\n\\nTell me which machine (e.g. Necta Opera Touch, Krea, Kometa, G-Snack or the Nayax card reader) and what is happening, and I\\'ll guide you step by step.\\n\\nI speak English, Español, Italiano... Type /reset any time to start a new conversation.' }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "Ms3ZONls8XKiT7Li",
+          "name": "MANuel - Operman"
+        }
+      }
+    },
+    {
+      "id": "g1",
+      "name": "Get Session",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1,
+      "alwaysOutputData": true,
+      "position": [
+        1800,
+        340
+      ],
+      "parameters": {
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "value": "QAWntSYFoVq7sQEm",
+          "mode": "id"
+        },
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "chatId",
+              "keyValue": "={{ $('Telegram Trigger').first().json.message.chat.id.toString() }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "b1",
+      "name": "Build Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3560,
+        340
+      ],
+      "parameters": {
+        "jsCode": "// System prompt comes from /files/manuel-config/system_prompt.md via Read Prompt -> Detect Media\n// (host: /var/www/n8n-shared/manuel-config/system_prompt.md)\nconst d = $('Detect Media').first().json;\nconst SP = d.SP;\nconst VS = 'vs_6ac368acbc64819186fb0a0b0b2e3864';\nconst SESSION_TTL_MS = 2 * 3600 * 1000; // conversation memory expires after 2h idle\nconst msg = $('Telegram Trigger').first().json.message;\nconst caption = ($('Combine').first().json.text || '').trim();\nconst content = [];\nlet userText, logText, transcript = '';\nif (d.kind === 'voice') {\n  transcript = ($input.first().json.text || '').trim();\n  userText = transcript ? '[Voice note transcript] ' + transcript : '[The user sent a voice note but it could not be transcribed. Ask them to repeat it or type it.]';\n  logText = '[voice] ' + transcript;\n} else if (d.kind === 'image') {\n  const bin = $input.first().binary?.data;\n  const buf = await this.helpers.getBinaryDataBuffer(0, 'data');\n  const mime = (bin?.mimeType || '').startsWith('image/') ? bin.mimeType : 'image/jpeg';\n  content.push({ type: 'input_image', image_url: 'data:' + mime + ';base64,' + buf.toString('base64'), detail: 'auto' });\n  userText = caption || '[The user sent a photo without any text.]';\n  logText = '[photo] ' + caption;\n} else if (d.kind === 'unsupported') {\n  userText = '[The user sent a video, sticker or file you cannot open. Ask for a photo or a short description instead.]' + (caption ? ' Caption: ' + caption : '');\n  logText = '[unsupported media] ' + caption;\n} else {\n  userText = caption || '[Empty message]';\n  logText = userText;\n}\ncontent.unshift({ type: 'input_text', text: userText });\nconst sess = $('Get Session').first().json;\nconst fresh = sess.lastActivity && (Date.now() - new Date(sess.lastActivity).getTime()) < SESSION_TTL_MS;\nconst name = msg.from?.first_name || '';\nconst payload = {\n  model: 'gpt-5.5',\n  instructions: SP + '\\n\\n# Current user\\nFirst name: ' + name,\n  input: [{ role: 'user', content }],\n  tools: [{ type: 'file_search', vector_store_ids: [VS], max_num_results: 6 }],\n  reasoning: { effort: 'low' },\n  truncation: 'auto',\n  store: true,\n  include: ['file_search_call.results']\n};\nif (fresh && String(sess.responseId || '').startsWith('resp_')) payload.previous_response_id = sess.responseId;\nreturn [{ json: { payload, userText: logText, transcript, kind: d.kind, chatId: String(msg.chat.id), userName: name } }];"
+      }
+    },
+    {
+      "id": "h1",
+      "name": "OpenAI Responses",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3780,
+        340
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/responses",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.payload) }}",
+        "options": {
+          "timeout": 90000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "Q3mwFgoOoVJBFw32",
+          "name": "OpenAi account 3"
+        }
+      }
+    },
+    {
+      "id": "p1",
+      "name": "Parse Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4000,
+        340
+      ],
+      "parameters": {
+        "jsCode": "const b = $input.first().json;\nconst req = $('Build Request').first().json;\nconst out = b.output || [];\nconst msg = out.find(o => o.type === 'message');\nlet text = msg?.content?.find(c => c.type === 'output_text')?.text || '';\ntext = text.replace(/\\*\\*/g, '').replace(/[ \\t]+([.,;:!?])/g, '$1').trim();\nif (req.kind === 'voice' && req.transcript && text) text = '🎙️ \"' + req.transcript + '\"\\n\\n' + text;\ntext = text.slice(0, 4000);\nconst sources = [...new Set(out.filter(o => o.type === 'file_search_call').flatMap(o => (o.results || []).map(r => r.filename)).concat((msg?.content?.[0]?.annotations || []).map(a => a.filename)).filter(Boolean))].join(', ');\nreturn [{ json: { ok: !!text && !b.error, text, responseId: b.id || '', error: b.error ? JSON.stringify(b.error) : '', sources, secs: (b.completed_at && b.created_at) ? b.completed_at - b.created_at : null, chatId: req.chatId, userName: req.userName, userText: req.userText } }];"
+      }
+    },
+    {
+      "id": "i2",
+      "name": "OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        4220,
+        340
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "ok1",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "s1",
+      "name": "Send Reply",
+      "webhookId": "manuel-mv-reply-4b7d",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        4440,
+        240
+      ],
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "Ms3ZONls8XKiT7Li",
+          "name": "MANuel - Operman"
+        }
+      }
+    },
+    {
+      "id": "u1",
+      "name": "Save Session",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1,
+      "position": [
+        4660,
+        160
+      ],
+      "parameters": {
+        "operation": "upsert",
+        "dataTableId": {
+          "__rl": true,
+          "value": "QAWntSYFoVq7sQEm",
+          "mode": "id"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "chatId",
+              "keyValue": "={{ $('Parse Response').first().json.chatId }}"
+            }
+          ]
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "chatId": "={{ $('Parse Response').first().json.chatId }}",
+            "responseId": "={{ $('Parse Response').first().json.responseId }}",
+            "userName": "={{ $('Parse Response').first().json.userName }}",
+            "lastActivity": "={{ $now.toISO() }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "chatId",
+              "displayName": "chatId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "responseId",
+              "displayName": "responseId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "userName",
+              "displayName": "userName",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "lastActivity",
+              "displayName": "lastActivity",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "l1",
+      "name": "Log Conversation",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1,
+      "position": [
+        4660,
+        340
+      ],
+      "parameters": {
+        "operation": "insert",
+        "dataTableId": {
+          "__rl": true,
+          "value": "b45Pq6eSQFm8lYeZ",
+          "mode": "id"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "timestamp": "={{ $now.toISO() }}",
+            "chatId": "={{ $('Parse Response').first().json.chatId }}",
+            "userName": "={{ $('Parse Response').first().json.userName }}",
+            "userMessage": "={{ $('Parse Response').first().json.userText }}",
+            "botResponse": "={{ $('Parse Response').first().json.text }}",
+            "sources": "={{ $('Parse Response').first().json.sources }}",
+            "secs": "={{ $('Parse Response').first().json.secs }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "timestamp",
+              "displayName": "timestamp",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "chatId",
+              "displayName": "chatId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "userName",
+              "displayName": "userName",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "userMessage",
+              "displayName": "userMessage",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "botResponse",
+              "displayName": "botResponse",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "sources",
+              "displayName": "sources",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "secs",
+              "displayName": "secs",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "readOnly": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "d2",
+      "name": "Reset Broken Session",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1,
+      "alwaysOutputData": true,
+      "position": [
+        4440,
+        480
+      ],
+      "parameters": {
+        "operation": "deleteRows",
+        "dataTableId": {
+          "__rl": true,
+          "value": "QAWntSYFoVq7sQEm",
+          "mode": "id"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "chatId",
+              "keyValue": "={{ $('Parse Response').first().json.chatId }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "a1",
+      "name": "Send Apology",
+      "webhookId": "manuel-mv-apology-4b7d",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        4660,
+        480
+      ],
+      "parameters": {
+        "chatId": "={{ $('Parse Response').first().json.chatId }}",
+        "text": "Sorry, I had a small technical hiccup 🔧 Please send your message again.",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "Ms3ZONls8XKiT7Li",
+          "name": "MANuel - Operman"
+        }
+      }
+    },
+    {
+      "id": "rp1",
+      "name": "Read Prompt",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [
+        2020,
+        340
+      ],
+      "parameters": {
+        "fileSelector": "/files/manuel-config/system_prompt.md",
+        "options": {}
+      }
+    },
+    {
+      "id": "dm1",
+      "name": "Detect Media",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2240,
+        340
+      ],
+      "parameters": {
+        "jsCode": "// Reads the system prompt file (input from Read Prompt) and takes the combined message from Combine\nconst SP = (await this.helpers.getBinaryDataBuffer(0, 'data')).toString('utf8');\nif (SP.length < 500) throw new Error('System prompt file missing or empty');\nconst c = $('Combine').first().json;\nreturn [{ json: { SP, kind: c.kind, fileId: c.fileId, hasMedia: !!c.fileId } }];"
+      }
+    },
+    {
+      "id": "hm1",
+      "name": "Has Media?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2460,
+        340
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "hm",
+              "leftValue": "={{ $json.hasMedia }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "df1",
+      "name": "Download File",
+      "webhookId": "9cfe9850-70f9-4b74-abe4-5251ed2ca457",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2680,
+        560
+      ],
+      "parameters": {
+        "resource": "file",
+        "fileId": "={{ $json.fileId }}",
+        "download": true,
+        "additionalFields": {}
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "Ms3ZONls8XKiT7Li",
+          "name": "MANuel - Operman"
+        }
+      }
+    },
+    {
+      "id": "iv1",
+      "name": "Is Voice?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2900,
+        560
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "iv",
+              "leftValue": "={{ $('Detect Media').first().json.kind }}",
+              "rightValue": "voice",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "fa1",
+      "name": "Fix Audio Name",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3120,
+        700
+      ],
+      "parameters": {
+        "jsCode": "// Telegram voice notes are .oga (ogg/opus); OpenAI needs a supported extension\nconst it = $input.first();\nit.binary.data.fileName = 'voice.ogg';\nit.binary.data.mimeType = 'audio/ogg';\nit.binary.data.fileExtension = 'ogg';\nreturn [it];"
+      }
+    },
+    {
+      "id": "tr1",
+      "name": "Transcribe",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3340,
+        700
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/audio/transcriptions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "model",
+              "value": "gpt-4o-transcribe"
+            },
+            {
+              "name": "prompt",
+              "value": "Multivend, MANuel, Necta, Opera Touch, Krea, Krea Touch, Kometa, Korinto, Kobalto, Koro, Karisma, Concerto, Maestro, Tango, Jazz, Swing, Twist, G-Snack, G-Drink, SandenVendo, Nayax, grinder lock, hopper, brewer, boiler, descale"
+            },
+            {
+              "parameterType": "formBinaryData",
+              "name": "file",
+              "inputDataFieldName": "data"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 60000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "Q3mwFgoOoVJBFw32",
+          "name": "OpenAi account 3"
+        }
+      }
+    },
+    {
+      "id": "pm1",
+      "name": "Parse Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        340
+      ],
+      "parameters": {
+        "jsCode": "// Normalises the incoming Telegram message. If the user REPLIES to a photo/voice without attaching one, use the replied media.\nconst m = $('Telegram Trigger').first().json.message;\nconst pick = (x) => {\n  if (!x) return null;\n  if (x.voice) return { kind: 'voice', fileId: x.voice.file_id };\n  if (x.audio) return { kind: 'voice', fileId: x.audio.file_id };\n  if (x.photo?.length) return { kind: 'image', fileId: x.photo[x.photo.length - 1].file_id };\n  if (x.document && /^image\\//.test(x.document.mime_type || '')) return { kind: 'image', fileId: x.document.file_id };\n  if (x.video || x.video_note || x.sticker || x.animation || x.document) return { kind: 'unsupported', fileId: '' };\n  return null;\n};\nlet media = pick(m);\nif (!media && m.reply_to_message) {\n  const r = pick(m.reply_to_message);\n  if (r && r.kind !== 'unsupported') media = r;\n}\nmedia = media || { kind: 'text', fileId: '' };\nreturn [{ json: { chatId: String(m.chat.id), messageId: m.message_id, kind: media.kind, fileId: media.fileId || '', text: (m.text || m.caption || '').trim() } }];"
+      }
+    },
+    {
+      "id": "qm1",
+      "name": "Queue Message",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1,
+      "position": [
+        700,
+        340
+      ],
+      "parameters": {
+        "operation": "insert",
+        "dataTableId": {
+          "__rl": true,
+          "value": "N7yScDoc7nb7Qgwh",
+          "mode": "id"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "chatId": "={{ $json.chatId }}",
+            "messageId": "={{ $json.messageId }}",
+            "kind": "={{ $json.kind }}",
+            "fileId": "={{ $json.fileId }}",
+            "text": "={{ $json.text }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "chatId",
+              "displayName": "chatId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "messageId",
+              "displayName": "messageId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "kind",
+              "displayName": "kind",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "fileId",
+              "displayName": "fileId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "text",
+              "displayName": "text",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "wt1",
+      "name": "Wait For Burst",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        920,
+        340
+      ],
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": 3,
+        "unit": "seconds"
+      },
+      "webhookId": "f5ea396e-d7ae-47d3-b0c5-4a7537b30fb5"
+    },
+    {
+      "id": "gp1",
+      "name": "Get Pending",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1,
+      "alwaysOutputData": true,
+      "position": [
+        1140,
+        340
+      ],
+      "parameters": {
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "value": "N7yScDoc7nb7Qgwh",
+          "mode": "id"
+        },
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "chatId",
+              "keyValue": "={{ $('Parse Message').first().json.chatId }}"
+            }
+          ]
+        },
+        "returnAll": true
+      }
+    },
+    {
+      "id": "cb1",
+      "name": "Combine",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1360,
+        340
+      ],
+      "parameters": {
+        "jsCode": "// Telegram sends 'forward with comment' and albums as separate updates arriving together.\n// Every message waits ~3s; only the execution holding the newest message answers, with everything combined.\nconst me = $('Parse Message').first().json;\nconst rows = $input.all().map(i => i.json).filter(r => r.messageId !== undefined && r.messageId !== null && r.chatId === me.chatId);\nconst mine = rows.some(r => Number(r.messageId) === Number(me.messageId));\nlet group;\nif (!mine) {\n  group = [me]; // our pending row was already consumed/cleared: answer this message on its own\n} else {\n  const maxId = Math.max(...rows.map(r => Number(r.messageId)));\n  if (Number(me.messageId) !== maxId) return []; // a newer message from this chat will answer for all\n  group = rows.sort((a, b) => Number(a.messageId) - Number(b.messageId));\n}\nconst text = group.map(r => (r.text || '').trim()).filter(Boolean).join('\\n');\nconst img = group.find(r => r.kind === 'image');\nconst voice = group.find(r => r.kind === 'voice');\nconst uns = group.find(r => r.kind === 'unsupported');\nconst media = img || voice || uns || { kind: 'text', fileId: '' };\nreturn [{ json: { chatId: me.chatId, kind: media.kind, fileId: media.fileId || '', text, count: group.length } }];"
+      }
+    },
+    {
+      "id": "cp1",
+      "name": "Clear Pending",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1,
+      "alwaysOutputData": true,
+      "position": [
+        1580,
+        340
+      ],
+      "parameters": {
+        "operation": "deleteRows",
+        "dataTableId": {
+          "__rl": true,
+          "value": "N7yScDoc7nb7Qgwh",
+          "mode": "id"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "chatId",
+              "keyValue": "={{ $('Combine').first().json.chatId }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "Typing",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Is Command?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Command?": {
+      "main": [
+        [
+          {
+            "node": "Clear Session",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Parse Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clear Session": {
+      "main": [
+        [
+          {
+            "node": "Send Welcome",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Request": {
+      "main": [
+        [
+          {
+            "node": "OpenAI Responses",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Responses": {
+      "main": [
+        [
+          {
+            "node": "Parse Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Response": {
+      "main": [
+        [
+          {
+            "node": "OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OK?": {
+      "main": [
+        [
+          {
+            "node": "Send Reply",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reset Broken Session",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Reply": {
+      "main": [
+        [
+          {
+            "node": "Save Session",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Log Conversation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reset Broken Session": {
+      "main": [
+        [
+          {
+            "node": "Send Apology",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Session": {
+      "main": [
+        [
+          {
+            "node": "Read Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Prompt": {
+      "main": [
+        [
+          {
+            "node": "Detect Media",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Detect Media": {
+      "main": [
+        [
+          {
+            "node": "Has Media?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Media?": {
+      "main": [
+        [
+          {
+            "node": "Download File",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download File": {
+      "main": [
+        [
+          {
+            "node": "Is Voice?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Voice?": {
+      "main": [
+        [
+          {
+            "node": "Fix Audio Name",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fix Audio Name": {
+      "main": [
+        [
+          {
+            "node": "Transcribe",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Transcribe": {
+      "main": [
+        [
+          {
+            "node": "Build Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Message": {
+      "main": [
+        [
+          {
+            "node": "Queue Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Queue Message": {
+      "main": [
+        [
+          {
+            "node": "Wait For Burst",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait For Burst": {
+      "main": [
+        [
+          {
+            "node": "Get Pending",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Pending": {
+      "main": [
+        [
+          {
+            "node": "Combine",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Combine": {
+      "main": [
+        [
+          {
+            "node": "Clear Pending",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clear Pending": {
+      "main": [
+        [
+          {
+            "node": "Get Session",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "executionOrder": "v1"
+  }
+}
